@@ -38,7 +38,9 @@
 #define KNOTS2MS(k) ((k) * 0.514444)
 
 static tNMEA2000_TWAI NMEA2000(TWAI_TX_PIN, TWAI_RX_PIN);
-static TaskHandle_t g_loopTask = nullptr;
+static TaskHandle_t g_loopTask  = nullptr;
+static uint32_t     g_lastVhwMs = 0;   // throttle PGN 
+static uint32_t     g_lastVlwMs = 0;   // throttle PGN 128275 to VLW_INTERVAL_MS
 
 // Called by the Arduino UART driver when RX data arrives.
 // Unblocks the loop task immediately rather than waiting for the timeout.
@@ -127,11 +129,23 @@ static void sendDistanceLog(double totalNm, double tripNm)
 // ---------------------------------------------------------------------------
 static void handleNMEA0183Msg(const tNMEA0183Msg &msg)
 {
-    if (msg.IsMessageCode("VHW")) {
-        sendWaterSpeed(fieldDouble(msg, 4));
+    uint32_t now = millis();
+    if (msg.IsMessageCode("VHW")) 
+    {
+        if (now - g_lastVhwMs >= VHW_INTERVAL_MS) 
+        {
+            sendWaterSpeed(fieldDouble(msg, 4));
+            g_lastVhwMs = now;
+        };
+    };
 
-    } else if (msg.IsMessageCode("VLW")) {
-        sendDistanceLog(fieldDouble(msg, 0), fieldDouble(msg, 2));
+    if (msg.IsMessageCode("VLW")) 
+    {
+        if (now - g_lastVlwMs >= VLW_INTERVAL_MS) 
+        {
+            sendDistanceLog(fieldDouble(msg, 0), fieldDouble(msg, 2));
+            g_lastVlwMs = now;
+        };
     }
 }
 

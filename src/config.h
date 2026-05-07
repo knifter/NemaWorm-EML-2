@@ -11,6 +11,10 @@
 #define TWAI_TX_PIN         GPIO_NUM_1   // to CAN transceiver TXD
 #define TWAI_RX_PIN         GPIO_NUM_0   // from CAN transceiver RXD
 
+// --- PGN transmit intervals --------------------------------------------------
+#define VHW_INTERVAL_MS     500      // Speed (limited by EML-2 sentence rate)
+#define VLW_INTERVAL_MS     5000    // Distance log — changes slowly
+
 // --- NMEA 2000 node identity -------------------------------------------------
 #define N2K_SERIAL_NUMBER   "00000001"
 #define N2K_PRODUCT_CODE    100
