@@ -17,15 +17,36 @@
 #include <Arduino.h>
 #include "esp_wifi.h"
 #include "esp_bt.h"
+#include "esp_pm.h"
 #include "config.h"
 
 #include <N2kMessages.h>
 #include <NMEA0183.h>
 #include "NMEA2000_TWAI.h"
 
-#define KNOTS2MS(k)     (k*0.514444)        // Knots to m/s
+// ---------------------------------------------------------------------------
+// Debug output — expands to nothing in release build
+// ---------------------------------------------------------------------------
+#ifdef DEBUG_BUILD
+  #define DBG(fmt, ...)  Serial.printf(fmt, ##__VA_ARGS__)
+  #define DBGLN(s)       Serial.println(s)
+#else
+  #define DBG(fmt, ...)  ((void)0)
+  #define DBGLN(s)       ((void)0)
+#endif
+
+#define KNOTS2MS(k) ((k) * 0.514444)
 
 static tNMEA2000_TWAI NMEA2000(TWAI_TX_PIN, TWAI_RX_PIN);
+static TaskHandle_t g_loopTask = nullptr;
+
+// Called by the Arduino UART driver when RX data arrives.
+// Unblocks the loop task immediately rather than waiting for the timeout.
+static void IRAM_ATTR onNmeaRx() {
+    BaseType_t woken = pdFALSE;
+    vTaskNotifyGiveFromISR(g_loopTask, &woken);
+    portYIELD_FROM_ISR(woken);
+}
 
 // ---------------------------------------------------------------------------
 // Power reduction
@@ -41,6 +62,18 @@ static void disableUnusedPeripherals()
 
     // 80 MHz is the minimum APB clock for reliable 250 kbps TWAI
     setCpuFrequencyMhz(CPU_FREQ_MHZ);
+}
+
+// In release: enable automatic light sleep during FreeRTOS idle.
+// Not used in debug because light sleep disconnects USB CDC.
+static void enableLightSleep()
+{
+    esp_pm_config_t pm = {
+        .max_freq_mhz       = CPU_FREQ_MHZ,
+        .min_freq_mhz       = CPU_FREQ_MIN_MHZ,
+        .light_sleep_enable = true
+    };
+    esp_pm_configure(&pm);
 }
 
 // ---------------------------------------------------------------------------
@@ -72,7 +105,7 @@ static void sendWaterSpeed(double speedKnots)
                     N2kDoubleNA,
                     N2kSWRT_Electro_magnetic);
     bool ok = NMEA2000.SendMsg(n2kMsg);
-    Serial.printf("[VHW] %.2f kn -> PGN 128259 %s\n", speedKnots, ok ? "ok" : "FAILED");
+    DBG("[VHW] %.2f kn -> PGN 128259 %s\n", speedKnots, ok ? "ok" : "FAILED");
 }
 
 // PGN 128275 — Distance Log
@@ -85,8 +118,8 @@ static void sendDistanceLog(double totalNm, double tripNm)
     uint32_t tripM  = (tripNm  != N2kDoubleNA) ? (uint32_t)(tripNm  * 1852.0) : 0xFFFFFFFFu;
     SetN2kDistanceLog(n2kMsg, 0, 0, totalM, tripM);   // no RTC on this device
     bool ok = NMEA2000.SendMsg(n2kMsg);
-    Serial.printf("[VLW] total=%.3f nm  trip=%.3f nm -> PGN 128275 %s\n",
-                  totalNm, tripNm, ok ? "ok" : "FAILED");
+    DBG("[VLW] total=%.3f nm  trip=%.3f nm -> PGN 128275 %s\n",
+        totalNm, tripNm, ok ? "ok" : "FAILED");
 }
 
 // ---------------------------------------------------------------------------
@@ -107,13 +140,24 @@ static void handleNMEA0183Msg(const tNMEA0183Msg &msg)
 // ---------------------------------------------------------------------------
 void setup()
 {
+#ifdef DEBUG_BUILD
     Serial.begin(DEBUG_BAUD);
-    disableUnusedPeripherals();
-    Serial.println("[boot] EML-2 N2K bridge starting");
-    Serial.printf("[boot] NMEA0183 UART1 RX=GPIO%d  %d baud\n", NMEA0183_RX_PIN, NMEA0183_BAUD);
-    Serial.printf("[boot] TWAI TX=GPIO%d  RX=GPIO%d\n", TWAI_TX_PIN, TWAI_RX_PIN);
+#endif
 
+    // C3 Super Mini has a WS2812B on GPIO8 — drive it low to kill its idle draw
+    pinMode(8, OUTPUT);
+    digitalWrite(8, LOW);
+
+    disableUnusedPeripherals();
+
+    DBGLN("[boot] EML-2 N2K bridge starting");
+    DBG("[boot] NMEA0183 UART1 RX=GPIO%d  %d baud  invert=%d\n",
+        NMEA0183_RX_PIN, NMEA0183_BAUD, (int)NMEA0183_INVERT);
+    DBG("[boot] TWAI TX=GPIO%d  RX=GPIO%d\n", TWAI_TX_PIN, TWAI_RX_PIN);
+
+    g_loopTask = xTaskGetCurrentTaskHandle();
     Serial1.begin(NMEA0183_BAUD, SERIAL_8N1, NMEA0183_RX_PIN, -1, NMEA0183_INVERT);
+    Serial1.onReceive(onNmeaRx);
     NMEA0183.Begin(&Serial1, 3);
 
     NMEA2000.SetProductInformation(N2K_SERIAL_NUMBER, N2K_PRODUCT_CODE,
@@ -124,7 +168,11 @@ void setup()
     NMEA2000.EnableForward(false);
     NMEA2000.Open();
 
-    Serial.println("[boot] ready");
+#ifndef DEBUG_BUILD
+    enableLightSleep();
+#endif
+
+    DBGLN("[boot] ready");
 }
 
 void loop()
@@ -134,4 +182,9 @@ void loop()
         handleNMEA0183Msg(inMsg);
     }
     NMEA2000.ParseMessages();
+
+    // Block until the UART RX callback wakes us, or 100 ms passes.
+    // 100 ms keeps ParseMessages() running for N2K address-claiming.
+    // The CPU enters light sleep for the full wait duration.
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
 }
