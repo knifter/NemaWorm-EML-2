@@ -10,7 +10,8 @@
 tNMEA2000_TWAI::tNMEA2000_TWAI(gpio_num_t txPin, gpio_num_t rxPin, tNMEA2000_TWAI::CAN_speed_t speed)
     : _txPin(txPin), _rxPin(rxPin), _speed(speed) {}
 
-bool tNMEA2000_TWAI::CANOpen() {
+bool tNMEA2000_TWAI::CANOpen() 
+{
     twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT(_txPin, _rxPin, TWAI_MODE_NORMAL);
     g.rx_queue_len = TWAI_RX_QUEUE_LEN;
     g.tx_queue_len = TWAI_TX_QUEUE_LEN;
@@ -40,7 +41,8 @@ bool tNMEA2000_TWAI::CANOpen() {
 };
 
 bool tNMEA2000_TWAI::CANSendFrame(unsigned long id, unsigned char len,
-                                  const unsigned char *buf, bool wait_sent) {
+                                  const unsigned char *buf, bool wait_sent) 
+{
     if (!_running)
         twaiWake();
     twai_message_t msg = {};
@@ -54,7 +56,8 @@ bool tNMEA2000_TWAI::CANSendFrame(unsigned long id, unsigned char len,
 }
 
 bool tNMEA2000_TWAI::CANGetFrame(unsigned long &id, unsigned char &len,
-                                 unsigned char *buf) {
+                                 unsigned char *buf) 
+{
     twai_message_t msg = {};
     if (twai_receive(&msg, 0) != ESP_OK) return false;  // non-blocking
     id  = msg.identifier;
@@ -63,7 +66,8 @@ bool tNMEA2000_TWAI::CANGetFrame(unsigned long &id, unsigned char &len,
     return true;
 }
 
-void tNMEA2000_TWAI::twaiSleep(uint32_t timeout) {
+void tNMEA2000_TWAI::twaiSleep(uint32_t timeout) 
+{
     if (!_running)
         return;
     twai_status_info_t s;
@@ -78,7 +82,8 @@ void tNMEA2000_TWAI::twaiSleep(uint32_t timeout) {
     _running = false;
 }
 
-void tNMEA2000_TWAI::twaiWake() {
+void tNMEA2000_TWAI::twaiWake() 
+{
     if (_running) 
         return;
     twai_start();
@@ -86,7 +91,8 @@ void tNMEA2000_TWAI::twaiWake() {
     _running = true;
 }
 
-bool tNMEA2000_TWAI::handleBusError() {
+bool tNMEA2000_TWAI::handleBusError() 
+{
     twai_status_info_t s;
     if (twai_get_status_info(&s) != ESP_OK)
         return false;
