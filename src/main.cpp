@@ -18,8 +18,11 @@
 #include "esp_wifi.h"
 #include "esp_bt.h"
 #include "esp_pm.h"
+#include "esp_sleep.h"
+#include "esp_system.h"
 #include "driver/uart.h"
 #include "config.h"
+#include "esp_private/periph_ctrl.h"
 
 #include <N2kMessages.h>
 #include <NMEA0183.h>
@@ -44,6 +47,12 @@ static tNMEA2000_TWAI NMEA2000(TWAI_TX_PIN, TWAI_RX_PIN);
 static double    g_speedKn  = N2kDoubleNA;
 static double    g_totalNm  = N2kDoubleNA;
 static double    g_tripNm   = N2kDoubleNA;
+
+// Keep track of CAN/TWAI sleep/standby state
+static bool      g_standby  = true;
+
+// USB connected? -> dont sleep
+static bool      g_usbActive = false;
 
 // Next scheduled send times
 static uint32_t  g_nextVhwMs = 0;
@@ -76,7 +85,37 @@ static void enableLightSleep()
         .light_sleep_enable = true
     };
     esp_pm_configure(&pm);
-}
+};
+
+// Close USB CDC before the first light sleep. Light sleep gates the USB
+// peripheral and CDC ends up in a half-broken state on wake anyway, so
+// tear it down deliberately rather than letting sleep entry mangle it.
+// Compiles to nothing when CDC wasn't enabled at boot (release build).
+static void disableUsbCDC()
+{
+#if ARDUINO_USB_CDC_ON_BOOT
+    Serial.flush();
+    Serial.end();
+    periph_module_disable(PERIPH_USB_DEVICE_MODULE);
+#endif
+};
+
+void can_wake()
+{
+    if(!g_standby)
+        return;
+    digitalWrite(TWAI_SB_PIN, LOW);
+    NMEA2000.twaiWake();
+    g_standby = false;
+};
+void can_sleep()
+{
+    if(g_standby)
+        return;
+    NMEA2000.twaiSleep();
+    digitalWrite(TWAI_SB_PIN, HIGH);
+    g_standby = true;
+};
 
 // ---------------------------------------------------------------------------
 // NMEA 0183 input
@@ -131,12 +170,10 @@ static void handleNMEA0183Msg(const tNMEA0183Msg &msg)
 {
     if (msg.IsMessageCode("VHW")) {
         g_speedKn = fieldDouble(msg, 4);
-        // DBG("[VHW] recv speed=%f\n", g_speedKn);
 
     } else if (msg.IsMessageCode("VLW")) {
         g_totalNm = fieldDouble(msg, 0);
         g_tripNm  = fieldDouble(msg, 2);
-        // DBG("[VLW] recv total=%f, trip=%f\n", g_totalNm, g_tripNm);
     }
 }
 
@@ -150,12 +187,17 @@ void setup()
 #endif
 
     // C3 Super Mini has a WS2812B on GPIO8 — drive it low to kill its idle draw
-    pinMode(8, OUTPUT);
-    digitalWrite(8, LOW);
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, LOW);
+
+    // CAN Transceiver standby pin
+    pinMode(TWAI_SB_PIN, OUTPUT);
+    digitalWrite(TWAI_SB_PIN, LOW);
 
     disableUnusedPeripherals();
 
     DBGLN("[boot] EML-2 N2K bridge starting");
+    DBG("[boot] reset_reason=%d\n", (int)esp_reset_reason());
     DBG("[boot] NMEA0183 UART1 RX=GPIO%d  %d baud  invert=%d\n",
         NMEA0183_RX_PIN, NMEA0183_BAUD, (int)NMEA0183_INVERT);
     DBG("[boot] TWAI TX=GPIO%d  RX=GPIO%d\n", TWAI_TX_PIN, TWAI_RX_PIN);
@@ -189,6 +231,21 @@ void setup()
     NMEA2000.EnableForward(false);
     NMEA2000.Open();
 
+#ifndef DEBUG_BUILD
+    enableLightSleep();
+#endif
+
+    if((bool)Serial)
+    {
+        DBG("[boot] USB-CDC Detected. Disabling sleep.\n");
+        g_usbActive = true;
+    };
+    if(usb_serial_jtag_is_connected())
+    {
+        DBG("[boot] USB-JTAG Detected. Disabling sleep.\n");
+        g_usbActive = true;
+    };
+
     DBGLN("[boot] ready");
 }
 
@@ -196,27 +253,63 @@ void loop()
 {
     uint32_t now = millis();
 
+    digitalWrite(LED_PIN, LOW);
+
     // Drain all buffered NMEA sentences into the cache
     tNMEA0183Msg inMsg;
-    while (NMEA0183.GetMessage(inMsg)) {
+    while (NMEA0183.GetMessage(inMsg)) 
+    {
         handleNMEA0183Msg(inMsg);
-    }
+    };
 
     // Send if due — wake TWAI only for the transmission window
     if(now >= g_nextVhwMs)
     {
+        can_wake();
         sendWaterSpeed(g_speedKn);
         g_nextVhwMs = now + VHW_INTERVAL_MS;
     };
     if(now >= g_nextVlwMs)
     {
+        can_wake();
         sendDistanceLog(g_totalNm, g_tripNm);
         g_nextVlwMs = now + VLW_INTERVAL_MS;
     };
-    NMEA2000.ParseMessages();   // handle N2K address-claiming while bus is active
+    if(!g_standby)
+    {
+        NMEA2000.ParseMessages();   // handle N2K address-claiming while bus is active
+    };
 
-    // delay until next message needs to be send    
+    // Manual light sleep — bypasses the FreeRTOS auto-sleep machinery which is
+    // blocked by PM locks held by the UART and USB Serial/JTAG drivers.
+    // Wakes on either the timer expiry (next send) or a UART RX edge.
     now = millis();
     uint32_t sleepMs = min(g_nextVhwMs - now, g_nextVlwMs - now);
-    vTaskDelay(pdMS_TO_TICKS(sleepMs));
-}
+
+    // Stay awake while a USB host has the CDC port open (DTR asserted) — that's
+    // a developer with a terminal or esptool attached. Also stay awake during
+    // the post-boot grace window so the NMEA 2000 address claim completes with
+    // the controller actually running and listening for counter-claims.
+    bool inGrace   = (now < BOOT_GRACE_MS);
+    if (g_usbActive || inGrace)
+    {
+        vTaskDelay(pdMS_TO_TICKS(sleepMs));
+        return;
+    };
+
+    DBG("usbActive: %d\n", g_usbActive);
+
+    // First commit to sleeping for the rest of this session: USB peripheral
+    // is going dark anyway on sleep entry, tear the CDC driver down cleanly.
+    static bool cdcDisabled = false;
+    if (!cdcDisabled)
+    {
+        disableUsbCDC();
+        cdcDisabled = true;
+    };
+
+    digitalWrite(LED_PIN, HIGH);
+    can_sleep();
+    esp_sleep_enable_timer_wakeup((uint64_t)sleepMs * 1000ULL);
+    esp_light_sleep_start();
+};
