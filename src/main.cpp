@@ -18,6 +18,7 @@
 #include "esp_wifi.h"
 #include "esp_bt.h"
 #include "esp_pm.h"
+#include "driver/uart.h"
 #include "config.h"
 
 #include <N2kMessages.h>
@@ -38,17 +39,16 @@
 #define KNOTS2MS(k) ((k) * 0.514444)
 
 static tNMEA2000_TWAI NMEA2000(TWAI_TX_PIN, TWAI_RX_PIN);
-static TaskHandle_t g_loopTask  = nullptr;
-static uint32_t     g_lastVhwMs = 0;   // throttle PGN 
-static uint32_t     g_lastVlwMs = 0;   // throttle PGN 128275 to VLW_INTERVAL_MS
 
-// Called by the Arduino UART driver when RX data arrives.
-// Unblocks the loop task immediately rather than waiting for the timeout.
-static void IRAM_ATTR onNmeaRx() {
-    BaseType_t woken = pdFALSE;
-    vTaskNotifyGiveFromISR(g_loopTask, &woken);
-    portYIELD_FROM_ISR(woken);
-}
+// Latest values received from EML-2, cached here and sent on our own schedule
+static double    g_speedKn  = N2kDoubleNA;
+static double    g_totalNm  = N2kDoubleNA;
+static double    g_tripNm   = N2kDoubleNA;
+
+// Next scheduled send times
+static uint32_t  g_nextVhwMs = 0;
+static uint32_t  g_nextVlwMs = 0;
+
 
 // ---------------------------------------------------------------------------
 // Power reduction
@@ -125,27 +125,18 @@ static void sendDistanceLog(double totalNm, double tripNm)
 }
 
 // ---------------------------------------------------------------------------
-// Sentence dispatcher
+// Sentence dispatcher — only caches values, never sends directly
 // ---------------------------------------------------------------------------
 static void handleNMEA0183Msg(const tNMEA0183Msg &msg)
 {
-    uint32_t now = millis();
-    if (msg.IsMessageCode("VHW")) 
-    {
-        if (now - g_lastVhwMs >= VHW_INTERVAL_MS) 
-        {
-            sendWaterSpeed(fieldDouble(msg, 4));
-            g_lastVhwMs = now;
-        };
-    };
+    if (msg.IsMessageCode("VHW")) {
+        g_speedKn = fieldDouble(msg, 4);
+        // DBG("[VHW] recv speed=%f\n", g_speedKn);
 
-    if (msg.IsMessageCode("VLW")) 
-    {
-        if (now - g_lastVlwMs >= VLW_INTERVAL_MS) 
-        {
-            sendDistanceLog(fieldDouble(msg, 0), fieldDouble(msg, 2));
-            g_lastVlwMs = now;
-        };
+    } else if (msg.IsMessageCode("VLW")) {
+        g_totalNm = fieldDouble(msg, 0);
+        g_tripNm  = fieldDouble(msg, 2);
+        // DBG("[VLW] recv total=%f, trip=%f\n", g_totalNm, g_tripNm);
     }
 }
 
@@ -169,9 +160,25 @@ void setup()
         NMEA0183_RX_PIN, NMEA0183_BAUD, (int)NMEA0183_INVERT);
     DBG("[boot] TWAI TX=GPIO%d  RX=GPIO%d\n", TWAI_TX_PIN, TWAI_RX_PIN);
 
-    g_loopTask = xTaskGetCurrentTaskHandle();
     Serial1.begin(NMEA0183_BAUD, SERIAL_8N1, NMEA0183_RX_PIN, -1, NMEA0183_INVERT);
-    Serial1.onReceive(onNmeaRx);
+
+    // Move UART1 onto XTAL clock so the peripheral survives light sleep —
+    // FIFO keeps capturing characters while the CPU is asleep. Default
+    // APB clock would be gated on entry to light sleep and we'd lose data.
+    uart_config_t cfg = {
+        .baud_rate           = NMEA0183_BAUD,
+        .data_bits           = UART_DATA_8_BITS,
+        .parity              = UART_PARITY_DISABLE,
+        .stop_bits           = UART_STOP_BITS_1,
+        .flow_ctrl           = UART_HW_FLOWCTRL_DISABLE,
+        .rx_flow_ctrl_thresh = 0,
+        .source_clk          = UART_SCLK_XTAL,
+    };
+    uart_param_config(UART_NUM_1, &cfg);
+
+    // Wake the CPU once ~10 characters' worth of RX edges have accumulated
+    uart_set_wakeup_threshold(UART_NUM_1, NMEA0183_WAKEUP_THRESHOLD);
+    esp_sleep_enable_uart_wakeup(UART_NUM_1);
     NMEA0183.Begin(&Serial1, 3);
 
     NMEA2000.SetProductInformation(N2K_SERIAL_NUMBER, N2K_PRODUCT_CODE,
@@ -182,23 +189,34 @@ void setup()
     NMEA2000.EnableForward(false);
     NMEA2000.Open();
 
-#ifndef DEBUG_BUILD
-    enableLightSleep();
-#endif
-
     DBGLN("[boot] ready");
 }
 
 void loop()
 {
+    uint32_t now = millis();
+
+    // Drain all buffered NMEA sentences into the cache
     tNMEA0183Msg inMsg;
-    if (NMEA0183.GetMessage(inMsg)) {
+    while (NMEA0183.GetMessage(inMsg)) {
         handleNMEA0183Msg(inMsg);
     }
-    NMEA2000.ParseMessages();
 
-    // Block until the UART RX callback wakes us, or 100 ms passes.
-    // 100 ms keeps ParseMessages() running for N2K address-claiming.
-    // The CPU enters light sleep for the full wait duration.
-    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+    // Send if due — wake TWAI only for the transmission window
+    if(now >= g_nextVhwMs)
+    {
+        sendWaterSpeed(g_speedKn);
+        g_nextVhwMs = now + VHW_INTERVAL_MS;
+    };
+    if(now >= g_nextVlwMs)
+    {
+        sendDistanceLog(g_totalNm, g_tripNm);
+        g_nextVlwMs = now + VLW_INTERVAL_MS;
+    };
+    NMEA2000.ParseMessages();   // handle N2K address-claiming while bus is active
+
+    // delay until next message needs to be send    
+    now = millis();
+    uint32_t sleepMs = min(g_nextVhwMs - now, g_nextVlwMs - now);
+    vTaskDelay(pdMS_TO_TICKS(sleepMs));
 }

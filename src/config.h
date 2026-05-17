@@ -3,9 +3,10 @@
 // --- NMEA 0183 input ---------------------------------------------------------
 // GPIO3 is NOT 5 V tolerant. If tapping the signal at 5 V on the PCB, add a
 // voltage divider before the pin (e.g. 10 kΩ series + 20 kΩ to GND → 3.3 V).
-#define NMEA0183_RX_PIN     3       // UART1 RX
-#define NMEA0183_BAUD       4800
-#define NMEA0183_INVERT     false   // true = signal is logic-inverted (RS-232 style PCB tap)
+#define NMEA0183_RX_PIN             3       // UART1 RX
+#define NMEA0183_BAUD               4800
+#define NMEA0183_WAKEUP_THRESHOLD   30
+#define NMEA0183_INVERT             false   // true = signal is logic-inverted (RS-232 style PCB tap)
 
 // --- NMEA 2000 / TWAI output -------------------------------------------------
 #define TWAI_TX_PIN         GPIO_NUM_1   // to CAN transceiver TXD
