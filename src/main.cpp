@@ -247,6 +247,7 @@ extern "C" void app_main(void)
     esp_sleep_enable_uart_wakeup(UART_NUM_1);
 
     NMEA0183.Open();
+    NMEA0183.SetMessageStream(&nmea0183Uart);
 
     NMEA2000.SetProductInformation(N2K_SERIAL_NUMBER, N2K_PRODUCT_CODE,
                                    N2K_MODEL_ID, N2K_SW_VERSION, N2K_HW_VERSION);
