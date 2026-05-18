@@ -1,0 +1,24 @@
+# --- Flash size (C3 SuperMini = 4 MB) ---------------------------------------
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
+# --- Console on USB-Serial-JTAG (built-in on ESP32-C3) ----------------------
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED=y
+
+# --- Power management: required for esp_pm_configure() / light sleep --------
+CONFIG_PM_ENABLE=y
+CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
+CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=3
+
+# --- TWAI ISR in IRAM so it survives cache disable during flash ops ---------
+CONFIG_TWAI_ISR_IN_IRAM=y
+
+# --- Compiler --------------------------------------------------------------
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# --- Disable bluetooth (saves space, we don't use it) ----------------------
+CONFIG_BT_ENABLED=n
+
+# --- Logging: route through USB-Serial-JTAG --------------------------------
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
