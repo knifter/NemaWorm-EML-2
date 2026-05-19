@@ -29,6 +29,8 @@
 #include "esp_system.h"
 #include "driver/gpio.h"
 #include "driver/uart.h"
+#include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_vfs.h"
 #include "hal/usb_serial_jtag_ll.h"
 #include "esp_private/periph_ctrl.h"
 #include "soc/periph_defs.h"
@@ -207,6 +209,18 @@ static void handleNMEA0183Msg(const tNMEA0183Msg &msg)
 // ---------------------------------------------------------------------------
 extern "C" void app_main(void)
 {
+    // Replace IDF's default LL-polling USB-Serial-JTAG console with the
+    // proper driver. The polling console has no bus-reset ISR — once a host
+    // disconnects, the peripheral wedges and Windows reports the device as
+    // "not functioning" on the next open. The driver hooks bus-reset and
+    // survives reconnects cleanly.
+    // Non-blocking VFS: writes drop bytes when the host stops reading instead
+    // of stalling on a ringbuffer. With the blocking driver path, one host
+    // disconnect leaves stale state that makes Windows report "device not
+    // functioning" on the next open.
+    // TvR: This makes the reconnect better but after missing more chars it still wont reconnect
+    usb_serial_jtag_vfs_use_nonblocking();
+
     // C3 Super Mini has a WS2812B on GPIO8 — drive it low to kill its idle draw
     gpio_set_direction(LED_PIN,     GPIO_MODE_OUTPUT);
     gpio_set_level(LED_PIN, 0);

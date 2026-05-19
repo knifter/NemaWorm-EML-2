@@ -43,7 +43,7 @@
 // Skip light sleep for the first N ms after boot so the NMEA 2000 address
 // claim has time to complete with the bus controller actually running.
 // USB-host presence drives the longer "stay awake" decision separately.
-#define BOOT_GRACE_MS       3000
+#define BOOT_GRACE_MS       10000
 
 // --- Debug serial (USB CDC) --------------------------------------------------
 #define DEBUG_BAUD          115200
