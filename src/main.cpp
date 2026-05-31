@@ -32,11 +32,9 @@
 // Debug output — expands to nothing in release build
 // ---------------------------------------------------------------------------
 #ifdef DEBUG_BUILD
-  #define DBG(fmt, ...)  Serial.printf(fmt, ##__VA_ARGS__)
-  #define DBGLN(s)       Serial.println(s)
+  #define DBG(fmt, ...)  Serial.printf("[%ld] " fmt, millis(), ##__VA_ARGS__)
 #else
   #define DBG(fmt, ...)  ((void)0)
-  #define DBGLN(s)       ((void)0)
 #endif
 
 #define KNOTS2MS(k) ((k) * 0.514444)
@@ -197,7 +195,7 @@ void setup()
 
     disableUnusedPeripherals();
 
-    DBGLN("[boot] EML-2 N2K bridge starting");
+    DBG("[boot] EML-2 N2K bridge starting\n");
     DBG("[boot] reset_reason=%d\n", (int)esp_reset_reason());
     DBG("[boot] NMEA0183 UART1 RX=GPIO%d  %d baud  invert=%d\n",
         NMEA0183_RX_PIN, NMEA0183_BAUD, (int)NMEA0183_INVERT);
@@ -247,7 +245,7 @@ void setup()
         g_usbActive = true;
     };
 
-    DBGLN("[boot] ready");
+    DBG("[boot] ready\n");
 }
 
 void loop()
