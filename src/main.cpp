@@ -53,8 +53,8 @@ static bool      g_standby  = true;
 static bool      g_usbActive = false;
 
 // Next scheduled send times
-static uint32_t  g_nextVhwMs = 0;
-static uint32_t  g_nextVlwMs = 0;
+static uint32_t  g_nextSpeed = 0;
+static uint32_t  g_nextLog = 0;
 
 
 // ---------------------------------------------------------------------------
@@ -267,17 +267,17 @@ void loop()
     };
 
     // Send if due — wake TWAI only for the transmission window
-    if(now >= g_nextVhwMs)
+    if(now >= g_nextSpeed)
     {
         can_wake();
         sendWaterSpeed(g_speedKn);
-        g_nextVhwMs = now + VHW_INTERVAL_MS;
+        g_nextSpeed = now + VHW_INTERVAL_MS;
     };
-    if(now >= g_nextVlwMs)
+    if(now >= g_nextLog)
     {
         can_wake();
         sendDistanceLog(g_totalNm, g_tripNm);
-        g_nextVlwMs = now + VLW_INTERVAL_MS;
+        g_nextLog = now + VLW_INTERVAL_MS;
     };
     if(!g_standby)
     {
@@ -288,7 +288,8 @@ void loop()
     // blocked by PM locks held by the UART and USB Serial/JTAG drivers.
     // Wakes on either the timer expiry (next send) or a UART RX edge.
     now = millis();
-    uint32_t sleepMs = min(g_nextVhwMs - now, g_nextVlwMs - now);
+    uint32_t sleepMs = min(g_nextSpeed - now, g_nextLog - now);
+
 
     // Stay awake while a USB host has the CDC port open (DTR asserted) — that's
     // a developer with a terminal or esptool attached. Also stay awake during
