@@ -146,7 +146,7 @@ static void sendWaterSpeed(double speedKnots)
                     N2kDoubleNA,
                     N2kSWRT_Electro_magnetic);
     bool ok = NMEA2000.SendMsg(n2kMsg);
-    DBG("[VHW] %.2f kn -> PGN 128259 %s\n", speedKnots, ok ? "ok" : "FAILED");
+    DBG("[tx:PGN128259] %.2f kn [%s]\n", speedKnots, ok ? "ok" : "FAILED");
 }
 
 // PGN 128275 — Distance Log
@@ -159,7 +159,7 @@ static void sendDistanceLog(double totalNm, double tripNm)
     uint32_t tripM  = (tripNm  != N2kDoubleNA) ? (uint32_t)(tripNm  * 1852.0) : 0xFFFFFFFFu;
     SetN2kDistanceLog(n2kMsg, 0, 0, totalM, tripM);   // no RTC on this device
     bool ok = NMEA2000.SendMsg(n2kMsg);
-    DBG("[VLW] total=%.3f nm  trip=%.3f nm -> PGN 128275 %s\n",
+    DBG("[tx:PGN128275] total=%.3f nm  trip=%.3f nm [%s]\n",
         totalNm, tripNm, ok ? "ok" : "FAILED");
 }
 
@@ -170,10 +170,11 @@ static void handleNMEA0183Msg(const tNMEA0183Msg &msg)
 {
     if (msg.IsMessageCode("VHW")) {
         g_speedKn = fieldDouble(msg, 4);
-
+        DBG("[rx:VHW] %.2f kn\n", g_speedKn);
     } else if (msg.IsMessageCode("VLW")) {
         g_totalNm = fieldDouble(msg, 0);
         g_tripNm  = fieldDouble(msg, 2);
+        DBG("[rx:VLW] total=%.3f nm  trip=%.3f nm\n", g_totalNm, g_tripNm);
     }
 }
 
