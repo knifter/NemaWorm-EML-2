@@ -46,6 +46,9 @@ static double    g_speedKn  = N2kDoubleNA;
 static double    g_totalNm  = N2kDoubleNA;
 static double    g_tripNm   = N2kDoubleNA;
 
+// Sequence ID for PGN 128259 — bumped once per received VHW sample (0..252)
+static uint8_t   g_speedSID = 0;
+
 // Keep track of CAN/TWAI sleep/standby state
 static bool      g_standby  = true;
 
@@ -139,7 +142,7 @@ static void sendWaterSpeed(double speedKnots)
 {
     if (speedKnots == N2kDoubleNA) return;
     tN2kMsg n2kMsg;
-    SetN2kBoatSpeed(n2kMsg, 0,
+    SetN2kBoatSpeed(n2kMsg, g_speedSID,
                     KNOTS2MS(speedKnots),
                     N2kDoubleNA,
                     N2kSWRT_Electro_magnetic);
@@ -168,6 +171,7 @@ static void handleNMEA0183Msg(const tNMEA0183Msg &msg)
 {
     if (msg.IsMessageCode("VHW")) {
         g_speedKn = fieldDouble(msg, 4);
+        g_speedSID = (g_speedSID + 1) % 253;
         DBG("[rx:VHW] %.2f kn\n", g_speedKn);
     } else if (msg.IsMessageCode("VLW")) {
         g_totalNm = fieldDouble(msg, 0);
