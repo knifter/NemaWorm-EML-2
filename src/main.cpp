@@ -255,6 +255,11 @@ void loop()
 
     digitalWrite(LED_PIN, LOW);
 
+    if(NMEA2000.handleBusError())
+    {
+        DBG("[ERROR] Bus error detected, CAN restarted.\n");
+    };
+
     // Drain all buffered NMEA sentences into the cache
     tNMEA0183Msg inMsg;
     while (NMEA0183.GetMessage(inMsg)) 
