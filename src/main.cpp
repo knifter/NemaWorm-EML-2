@@ -271,13 +271,15 @@ void loop()
     {
         can_wake();
         sendWaterSpeed(g_speedKn);
-        g_nextSpeed += VHW_INTERVAL_MS;
+        while(now >= g_nextSpeed)
+            g_nextSpeed += VHW_INTERVAL_MS;
     };
     if(now >= g_nextLog)
     {
         can_wake();
         sendDistanceLog(g_totalNm, g_tripNm);
-        g_nextLog += VLW_INTERVAL_MS;
+        while(now >= g_nextLog)
+            g_nextLog += VLW_INTERVAL_MS;
     };
     if(!g_standby)
     {
