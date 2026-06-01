@@ -224,7 +224,9 @@ void setup()
     // Wake the CPU once ~10 characters' worth of RX edges have accumulated
     uart_set_wakeup_threshold(UART_NUM_1, NMEA0183_WAKEUP_THRESHOLD);
     esp_sleep_enable_uart_wakeup(UART_NUM_1);
-    NMEA0183.Begin(&Serial1, 3);
+    // Don't use Begin(): it re-calls Serial1.begin() and reverts the UART clock
+    NMEA0183.SetMessageStream(&Serial1, 3);
+    NMEA0183.Open();
 
     NMEA2000.SetProductInformation(N2K_SERIAL_NUMBER, N2K_PRODUCT_CODE,
                                    N2K_MODEL_ID, N2K_SW_VERSION, N2K_HW_VERSION);
