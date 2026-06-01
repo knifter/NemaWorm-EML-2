@@ -76,18 +76,6 @@ static void disableUnusedPeripherals()
     setCpuFrequencyMhz(CPU_FREQ_MHZ);
 }
 
-// In release: enable automatic light sleep during FreeRTOS idle.
-// Not used in debug because light sleep disconnects USB CDC.
-static void enableLightSleep()
-{
-    esp_pm_config_t pm = {
-        .max_freq_mhz       = CPU_FREQ_MHZ,
-        .min_freq_mhz       = CPU_FREQ_MIN_MHZ,
-        .light_sleep_enable = true
-    };
-    esp_pm_configure(&pm);
-};
-
 // Close USB CDC before the first light sleep. Light sleep gates the USB
 // peripheral and CDC ends up in a half-broken state on wake anyway, so
 // tear it down deliberately rather than letting sleep entry mangle it.
@@ -236,8 +224,15 @@ void setup()
     NMEA2000.EnableForward(false);
     NMEA2000.Open();
 
+    // In release: enable automatic light sleep during FreeRTOS idle.
+    // Not used in debug because light sleep disconnects USB CDC.
 #ifndef DEBUG_BUILD
-    enableLightSleep();
+    esp_pm_config_t pm = {
+        .max_freq_mhz       = CPU_FREQ_MHZ,
+        .min_freq_mhz       = CPU_FREQ_MIN_MHZ,
+        .light_sleep_enable = true
+    };
+    // esp_pm_configure(&pm);
 #endif
 
     if((bool)Serial)
