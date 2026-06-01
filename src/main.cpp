@@ -296,6 +296,7 @@ void loop()
     // a developer with a terminal or esptool attached. Also stay awake during
     // the post-boot grace window so the NMEA 2000 address claim completes with
     // the controller actually running and listening for counter-claims.
+    DBG("usbActive: %d\n", g_usbActive);
     bool inGrace   = (now < BOOT_GRACE_MS);
     if (g_usbActive || inGrace)
     {
@@ -303,7 +304,6 @@ void loop()
         return;
     };
 
-    DBG("usbActive: %d\n", g_usbActive);
 
     // First commit to sleeping for the rest of this session: USB peripheral
     // is going dark anyway on sleep entry, tear the CDC driver down cleanly.
