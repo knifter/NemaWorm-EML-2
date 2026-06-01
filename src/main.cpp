@@ -49,11 +49,6 @@ static double    g_tripNm   = N2kDoubleNA;
 // Sequence ID for PGN 128259 — bumped once per received VHW sample (0..252)
 static uint8_t   g_speedSID = 0;
 
-// Keep track of CAN/TWAI sleep/standby state
-static bool      g_standby  = true;
-
-// USB connected? -> dont sleep
-static bool      g_usbActive = false;
 
 // Next scheduled send times
 static uint32_t  g_nextSpeed = 0;
@@ -76,34 +71,15 @@ static void disableUnusedPeripherals()
     setCpuFrequencyMhz(CPU_FREQ_MHZ);
 }
 
-// Close USB CDC before the first light sleep. Light sleep gates the USB
-// peripheral and CDC ends up in a half-broken state on wake anyway, so
-// tear it down deliberately rather than letting sleep entry mangle it.
-// Compiles to nothing when CDC wasn't enabled at boot (release build).
-static void disableUsbCDC()
-{
-#if ARDUINO_USB_CDC_ON_BOOT
-    Serial.flush();
-    Serial.end();
-    periph_module_disable(PERIPH_USB_DEVICE_MODULE);
-#endif
-};
-
 void can_wake()
 {
-    if(!g_standby)
-        return;
     digitalWrite(TWAI_SB_PIN, LOW);
     NMEA2000.twaiWake();
-    g_standby = false;
 };
 void can_sleep()
 {
-    if(g_standby)
-        return;
     NMEA2000.twaiSleep();
     digitalWrite(TWAI_SB_PIN, HIGH);
-    g_standby = true;
 };
 
 // ---------------------------------------------------------------------------
@@ -195,9 +171,8 @@ void setup()
 
     Serial1.begin(NMEA0183_BAUD, SERIAL_8N1, NMEA0183_RX_PIN, -1, NMEA0183_INVERT);
 
-    // Move UART1 onto XTAL clock so the peripheral survives light sleep —
-    // FIFO keeps capturing characters while the CPU is asleep. Default
-    // APB clock would be gated on entry to light sleep and we'd lose data.
+    // Clock UART1 from XTAL so the baud rate is unaffected by APB frequency
+    // scaling. (APB-sourced baud would drift if the CPU clock ever moves.)
     uart_config_t cfg = {
         .baud_rate           = NMEA0183_BAUD,
         .data_bits           = UART_DATA_8_BITS,
@@ -209,9 +184,6 @@ void setup()
     };
     uart_param_config(UART_NUM_1, &cfg);
 
-    // Wake the CPU once ~10 characters' worth of RX edges have accumulated
-    uart_set_wakeup_threshold(UART_NUM_1, NMEA0183_WAKEUP_THRESHOLD);
-    esp_sleep_enable_uart_wakeup(UART_NUM_1);
     // Don't use Begin(): it re-calls Serial1.begin() and reverts the UART clock
     NMEA0183.SetMessageStream(&Serial1, 3);
     NMEA0183.Open();
@@ -224,27 +196,16 @@ void setup()
     NMEA2000.EnableForward(false);
     NMEA2000.Open();
 
-    // In release: enable automatic light sleep during FreeRTOS idle.
-    // Not used in debug because light sleep disconnects USB CDC.
-#ifndef DEBUG_BUILD
+    // Cap CPU at the lowest TWAI-safe frequency but let it scale down to idle.
+    // DFS only — light sleep stays OFF (it gates the UART). The TWAI driver
+    // holds an APB-max lock while transmitting, so TX still gets 80 MHz; the
+    // XTAL-clocked UART is immune to the APB swings DFS causes.
     esp_pm_config_t pm = {
         .max_freq_mhz       = CPU_FREQ_MHZ,
         .min_freq_mhz       = CPU_FREQ_MIN_MHZ,
-        .light_sleep_enable = true
+        .light_sleep_enable = false
     };
-    // esp_pm_configure(&pm);
-#endif
-
-    if((bool)Serial)
-    {
-        DBG("[boot] USB-CDC Detected. Disabling sleep.\n");
-        g_usbActive = true;
-    };
-    if(usb_serial_jtag_is_connected())
-    {
-        DBG("[boot] USB-JTAG Detected. Disabling sleep.\n");
-        g_usbActive = true;
-    };
+    esp_pm_configure(&pm);
 
     DBG("[boot] ready\n");
 }
@@ -267,55 +228,43 @@ void loop()
         handleNMEA0183Msg(inMsg);
     };
 
-    // Send if due — wake TWAI only for the transmission window
+    // Send if due. Pull the transceiver out of standby (SB low) before queuing
+    // so the frames reach the bus, and flag that a TX burst is in flight.
+    static bool can_enabled = true;
     if(now >= g_nextSpeed)
     {
-        can_wake();
+        if(!can_enabled)
+            can_wake();
+        can_enabled = true;
+
         sendWaterSpeed(g_speedKn);
         while(now >= g_nextSpeed)
             g_nextSpeed += VHW_INTERVAL_MS;
     };
     if(now >= g_nextLog)
     {
-        can_wake();
+        if(!can_enabled)
+            can_wake();
+        can_enabled = true;
+
         sendDistanceLog(g_totalNm, g_tripNm);
         while(now >= g_nextLog)
             g_nextLog += VLW_INTERVAL_MS;
     };
-    if(!g_standby)
+    if(can_enabled)
     {
-        NMEA2000.ParseMessages();   // handle N2K address-claiming while bus is active
+        // handle N2K address-claiming while bus is active
+        NMEA2000.ParseMessages();   
+
+        if(now > BOOT_GRACE_MS)
+        {
+            can_enabled = false;
+            can_sleep(); // will wait for TxQueue empty
+        };
     };
 
-    // Manual light sleep — bypasses the FreeRTOS auto-sleep machinery which is
-    // blocked by PM locks held by the UART and USB Serial/JTAG drivers.
-    // Wakes on either the timer expiry (next send) or a UART RX edge.
-    uint32_t sleepMs = min(g_nextSpeed - now, g_nextLog - now);
-
-    // Stay awake while a USB host has the CDC port open (DTR asserted) — that's
-    // a developer with a terminal or esptool attached. Also stay awake during
-    // the post-boot grace window so the NMEA 2000 address claim completes with
-    // the controller actually running and listening for counter-claims.
-    DBG("usbActive: %d\n", g_usbActive);
-    bool inGrace   = (now < BOOT_GRACE_MS);
-    if (g_usbActive || inGrace)
-    {
-        vTaskDelay(pdMS_TO_TICKS(sleepMs));
-        return;
-    };
-
-
-    // First commit to sleeping for the rest of this session: USB peripheral
-    // is going dark anyway on sleep entry, tear the CDC driver down cleanly.
-    static bool cdcDisabled = false;
-    if (!cdcDisabled)
-    {
-        disableUsbCDC();
-        cdcDisabled = true;
-    };
-
+    // Delay until it is time to send the next PGN (will read UART backlog then)
     digitalWrite(LED_PIN, HIGH);
-    can_sleep();
-    esp_sleep_enable_timer_wakeup((uint64_t)sleepMs * 1000ULL);
-    esp_light_sleep_start();
+    uint32_t sleepMs = min(g_nextSpeed - now, g_nextLog - now);
+    vTaskDelay(pdMS_TO_TICKS(sleepMs));  
 };
