@@ -71,17 +71,6 @@ static void disableUnusedPeripherals()
     setCpuFrequencyMhz(CPU_FREQ_MHZ);
 }
 
-void can_wake()
-{
-    digitalWrite(TWAI_SB_PIN, LOW);
-    NMEA2000.twaiWake();
-};
-void can_sleep()
-{
-    NMEA2000.twaiSleep();
-    digitalWrite(TWAI_SB_PIN, HIGH);
-};
-
 // ---------------------------------------------------------------------------
 // NMEA 0183 input
 // ---------------------------------------------------------------------------
@@ -228,40 +217,21 @@ void loop()
         handleNMEA0183Msg(inMsg);
     };
 
-    // Send if due. Pull the transceiver out of standby (SB low) before queuing
-    // so the frames reach the bus, and flag that a TX burst is in flight.
-    static bool can_enabled = true;
     if(now >= g_nextSpeed)
     {
-        if(!can_enabled)
-            can_wake();
-        can_enabled = true;
-
         sendWaterSpeed(g_speedKn);
         while(now >= g_nextSpeed)
             g_nextSpeed += VHW_INTERVAL_MS;
     };
     if(now >= g_nextLog)
     {
-        if(!can_enabled)
-            can_wake();
-        can_enabled = true;
-
         sendDistanceLog(g_totalNm, g_tripNm);
         while(now >= g_nextLog)
             g_nextLog += VLW_INTERVAL_MS;
     };
-    if(can_enabled)
-    {
-        // handle N2K address-claiming while bus is active
-        NMEA2000.ParseMessages();   
+    // handle N2K address-claiming while bus is active
+    NMEA2000.ParseMessages();   
 
-        if(now > BOOT_GRACE_MS)
-        {
-            can_enabled = false;
-            can_sleep(); // will wait for TxQueue empty
-        };
-    };
 
     // Delay until it is time to send the next PGN (will read UART backlog then)
     digitalWrite(LED_PIN, HIGH);
