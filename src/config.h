@@ -22,6 +22,12 @@
 // the TX burst is released onto the bus. Adjust to your transceiver's datasheet.
 #define TWAI_SB_WAKE_US     50
 
+// Max time to wait for a TX burst to drain before giving up. A frame the bus
+// won't ACK (e.g. a missing terminator) is retransmitted by the controller
+// forever and msgs_to_tx never reaches zero; without this bound the drain loop
+// would freeze. Healthy bursts drain in well under a millisecond.
+#define TX_DRAIN_TIMEOUT_MS 200
+
 // --- PGN transmit intervals --------------------------------------------------
 #define VHW_INTERVAL_MS     500      // Speed (limited by EML-2 sentence rate)
 #define VLW_INTERVAL_MS     5000    // Distance log — changes slowly
