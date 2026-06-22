@@ -72,6 +72,22 @@ static void disableUnusedPeripherals()
 }
 
 // ---------------------------------------------------------------------------
+// CAN transmit-gate callbacks
+// ---------------------------------------------------------------------------
+// The transceiver idles in standby (SB high) and still receives; we drop it to
+// normal mode only around a TX burst. The TWAI controller is never stopped.
+static bool can_tx_wake()
+{
+    digitalWrite(TWAI_SB_PIN, LOW);
+    delayMicroseconds(TWAI_SB_WAKE_US);   // let the transceiver leave standby
+    return true;
+};
+static void can_tx_idle()
+{
+    digitalWrite(TWAI_SB_PIN, HIGH);
+};
+
+// ---------------------------------------------------------------------------
 // NMEA 0183 input
 // ---------------------------------------------------------------------------
 static tNMEA0183 NMEA0183;
@@ -146,9 +162,9 @@ void setup()
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
 
-    // CAN Transceiver standby pin
+    // CAN Transceiver standby pin — idle in standby; the TX gate pulses it low
     pinMode(TWAI_SB_PIN, OUTPUT);
-    digitalWrite(TWAI_SB_PIN, LOW);
+    digitalWrite(TWAI_SB_PIN, HIGH);
 
     disableUnusedPeripherals();
 
@@ -183,6 +199,7 @@ void setup()
                                   N2K_DEVICE_CLASS, N2K_MFR_CODE);
     NMEA2000.SetMode(tNMEA2000::N2km_NodeOnly, 22);
     NMEA2000.EnableForward(false);
+    NMEA2000.setTxStandbyCallbacks(can_tx_wake, can_tx_idle);
     NMEA2000.Open();
 
     // Cap CPU at the lowest TWAI-safe frequency but let it scale down to idle.
@@ -230,8 +247,17 @@ void loop()
             g_nextLog += VLW_INTERVAL_MS;
     };
     // handle N2K address-claiming while bus is active
-    NMEA2000.ParseMessages();   
+    NMEA2000.ParseMessages();
 
+    // Drain everything queued this iteration (our PGNs plus any replies
+    // ParseMessages generated) and return the transceiver to standby before the
+    // long idle wait. txStandby() is non-blocking, so loop it here until it
+    // reports the transceiver is back in standby.
+    while (!NMEA2000.txStandby())
+    {
+        NMEA2000.ParseMessages();      // keep RX alive + push any backlog
+        vTaskDelay(pdMS_TO_TICKS(1));
+    };
 
     // Delay until it is time to send the next PGN (will read UART backlog then)
     digitalWrite(LED_PIN, HIGH);

@@ -18,6 +18,10 @@
 #define TWAI_RX_QUEUE_LEN   20
 #define TWAI_TX_QUEUE_LEN   20
 
+// Transceiver standby->normal settle time, waited after SB is driven low before
+// the TX burst is released onto the bus. Adjust to your transceiver's datasheet.
+#define TWAI_SB_WAKE_US     50
+
 // --- PGN transmit intervals --------------------------------------------------
 #define VHW_INTERVAL_MS     500      // Speed (limited by EML-2 sentence rate)
 #define VLW_INTERVAL_MS     5000    // Distance log — changes slowly
