@@ -255,6 +255,8 @@ void loop()
     // reports the transceiver is back in standby.
     while (!NMEA2000.txStandby())
     {
+        if (NMEA2000.handleBusError())
+            break;                     // bus-off: stop draining, recover instead
         NMEA2000.ParseMessages();      // keep RX alive + push any backlog
         vTaskDelay(pdMS_TO_TICKS(1));
     };
