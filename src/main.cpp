@@ -253,10 +253,13 @@ void loop()
     // ParseMessages generated) and return the transceiver to standby before the
     // long idle wait. txStandby() is non-blocking, so loop it here until it
     // reports the transceiver is back in standby.
+    TickType_t txDeadline = xTaskGetTickCount() + pdMS_TO_TICKS(TX_DRAIN_TIMEOUT_MS);
     while (!NMEA2000.txStandby())
     {
         if (NMEA2000.handleBusError())
             break;                     // bus-off: stop draining, recover instead
+        if ((int32_t)(xTaskGetTickCount() - txDeadline) >= 0)
+            break;                     // TX wedged (e.g. unacked frame): give up, don't freeze
         NMEA2000.ParseMessages();      // keep RX alive + push any backlog
         vTaskDelay(pdMS_TO_TICKS(1));
     };
